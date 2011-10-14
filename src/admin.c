@@ -47,6 +47,8 @@ static int handler_device(const char *, const char *, lo_arg **,
                           int, lo_message, void *);
 static int handler_logout(const char *, const char *, lo_arg **,
                           int, lo_message, void *);
+static int handler_address(const char *, const char *, lo_arg **,
+                           int, lo_message, void *);
 static int handler_id_n_signals_input_get(const char *, const char *,
                                           lo_arg **, int, lo_message, 
                                           void *);
@@ -315,6 +317,15 @@ static void mapper_admin_add_monitor_methods(mapper_admin admin)
     }
 }
 
+static void mapper_admin_send_address_probe(mapper_admin admin)
+{
+    if ((get_current_time() - admin->address_probe_time) > 2)
+    {
+        mapper_admin_send_osc(admin, "/address", "i", admin->random_id);
+        admin->address_probe_time = get_current_time();
+    }
+}
+
 mapper_admin mapper_admin_new(const char *iface, const char *group, int port)
 {
     mapper_admin admin = (mapper_admin)calloc(1, sizeof(mapper_admin_t));
@@ -332,9 +343,13 @@ mapper_admin mapper_admin_new(const char *iface, const char *group, int port)
         snprintf(port_str, 10, "%d", port);
 
     /* Initialize interface information. */
-    if (get_interface_addr(iface, &admin->interface_ip,
-                           &admin->interface_name))
-        trace("no interface found\n");
+    if (iface) {
+        if (get_interface_addr(iface, &admin->interface_addr,
+                               &admin->interface_name))
+            trace("no interface found\n");
+
+        admin->interface_saddr = strdup(inet_ntoa(admin->interface_addr));
+    }
 
     /* Open address */
     admin->admin_addr = lo_address_new(group, s_port);
@@ -370,6 +385,15 @@ mapper_admin mapper_admin_new(const char *iface, const char *group, int port)
         return NULL;
     }
 
+    /* Seed the random number generator. */
+    seed_srand();
+
+    /* Choose a random ID for allocation speedup */
+    admin->random_id = rand();
+
+    /* Send out initial probe to get the local receiving address. */
+    mapper_admin_send_address_probe(admin);
+
     return admin;
 }
 
@@ -394,6 +418,9 @@ void mapper_admin_free(mapper_admin admin)
 
     if (admin->interface_name)
         free(admin->interface_name);
+
+    if (admin->interface_saddr)
+        free(admin->interface_saddr);
 
     if (admin->admin_server)
         lo_server_free(admin->admin_server);
@@ -426,12 +453,6 @@ void mapper_admin_add_device(mapper_admin admin, mapper_device dev,
         }
         admin->device->flags = 0;
 
-        /* Seed the random number generator. */
-        seed_srand();
-        
-        /* Choose a random ID for allocation speedup */
-        admin->random_id = rand();
-
         /* Add methods for admin bus.  Only add methods needed for
          * allocation here. Further methods are added when the device is
          * registered. */
@@ -443,6 +464,10 @@ void mapper_admin_add_device(mapper_admin admin, mapper_device dev,
                              handler_device_port_registered, admin);
         lo_server_add_method(admin->admin_server, "/name/registered", NULL,
                              handler_device_name_registered, admin);
+        lo_server_add_method(admin->admin_server, "/address", "i",
+                             handler_address, admin);
+        lo_server_add_method(admin->admin_server, "/address", "is",
+                             handler_address, admin);
 
         /* Probe potential port and name to admin bus. */
         mapper_admin_port_probe(admin);
@@ -519,7 +544,8 @@ int mapper_admin_poll(mapper_admin admin)
     /* If we are ready to register the device, add the needed message
      * handlers. */
     if (!admin->registered
-        && admin->port.locked && admin->ordinal.locked)
+        && admin->port.locked && admin->ordinal.locked
+        && admin->interface_saddr)
     {
         mapper_admin_add_device_methods(admin);
 
@@ -528,11 +554,17 @@ int mapper_admin_poll(mapper_admin admin)
               admin->identifier, admin, mapper_admin_name(admin));
         admin->device->flags |= FLAGS_ATTRIBS_CHANGED;
     }
+    else if (!admin->registered && !admin->interface_saddr)
+    {
+        /* Send out another probe to get the local receiving address. */
+        mapper_admin_send_address_probe(admin);
+    }
+
     if (admin->registered && (admin->device->flags & FLAGS_ATTRIBS_CHANGED)) {
         admin->device->flags &= ~FLAGS_ATTRIBS_CHANGED;
         mapper_admin_send_osc(
               admin, "/device", "s", mapper_admin_name(admin),
-              AT_IP, inet_ntoa(admin->interface_ip),
+              AT_IP, admin->interface_saddr,
               AT_PORT, admin->port.value,
               AT_NUMINPUTS, admin->device ? mdev_num_inputs(admin->device) : 0,
               AT_NUMOUTPUTS, admin->device ? mdev_num_outputs(admin->device) : 0,
@@ -765,7 +797,7 @@ static int handler_who(const char *path, const char *types, lo_arg **argv,
 
     mapper_admin_send_osc(
         admin, "/device", "s", mapper_admin_name(admin),
-        AT_IP, inet_ntoa(admin->interface_ip),
+        AT_IP, admin->interface_saddr,
         AT_PORT, admin->port.value,
         AT_NUMINPUTS, admin->device ? mdev_num_inputs(admin->device) : 0,
         AT_NUMOUTPUTS, admin->device ? mdev_num_outputs(admin->device) : 0,
@@ -851,6 +883,41 @@ static int handler_logout(const char *path, const char *types,
                 admin->ordinal.suggestion[diff-1] = 0;
             }
         }
+    }
+
+    return 0;
+}
+
+/*! Respond to /address by returning the sender's hostname or IP
+ *  address. If there is a second argument, assign the address
+ *  specified if one is not already known. */
+static int handler_address(const char *path, const char *types,
+                           lo_arg **argv, int argc, lo_message msg,
+                           void *user_data)
+{
+    mapper_admin admin = (mapper_admin) user_data;
+
+    int rand_id = argv[0]->i;
+
+    if (argc == 1 && rand_id != admin->random_id) {
+        lo_address a = lo_message_get_source(msg);
+        mapper_admin_send_osc(admin, "/address", "is",
+                              rand_id, lo_address_get_hostname(a));
+    }
+    else if (argc == 2 && rand_id == admin->random_id
+             && !admin->interface_saddr)
+    {
+        admin->interface_saddr = strdup(&argv[1]->s);
+        struct hostent *he = gethostbyname(admin->interface_saddr);
+        if (he && he->h_addrtype == AF_INET) { // TODO: IPv6
+            unsigned int i=0;
+            while (he->h_addr_list[i]) {
+                admin->interface_addr =
+                    *(struct in_addr*)(he->h_addr_list[i]);
+                break; // just take the first one
+            }
+        }
+        // TODO: get interface associated with IP
     }
 
     return 0;
@@ -1266,7 +1333,7 @@ static int handler_device_link(const char *path, const char *types,
     if (strcmp(mapper_admin_name(admin), dest_name) == 0) {
         mapper_admin_send_osc(
             admin, "/linkTo", "ss", src_name, dest_name,
-            AT_IP, inet_ntoa(admin->interface_ip),
+            AT_IP, admin->interface_saddr,
             AT_PORT, admin->port.value);
     }
     return 0;

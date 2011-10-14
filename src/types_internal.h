@@ -104,7 +104,11 @@ typedef struct _mapper_admin {
     char *interface_name;             /*!< The name of the network
                                        *   interface for receiving
                                        *   messages. */
-    struct in_addr interface_ip;      /*!< The IP address of interface. */
+    struct in_addr interface_addr;    /*!< Numerical representation of
+                                       *   the interface address. */
+    char *interface_saddr;            /*!< A string representation of
+                                       *   the interface address. */
+    double address_probe_time;        /*!< Time of last address probe. */
     int registered;                   /*!< Non-zero if this device has
                                        *   been registered. */
     struct _mapper_device *device;    /*!< Device that this admin is

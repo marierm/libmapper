@@ -93,7 +93,7 @@ void insig_handler(mapper_signal sig, mapper_db_signal props,
 /*! Creation of a local destination. */
 int setup_destination()
 {
-    destination = mdev_new("testrecv", port, 0);
+    destination = mdev_new("testsend", port, 0);
     if (!destination)
         goto error;
     printf("destination created.\n");

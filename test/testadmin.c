@@ -33,8 +33,10 @@ int test_admin()
 
     printf("Device structure initialized.\n");
 
-    printf("Found interface %s has IP %s\n", my_admin->interface_name,
-           inet_ntoa(my_admin->interface_ip));
+    printf("Found interface %s has address %s (%s)\n",
+           my_admin->interface_name,
+           my_admin->interface_saddr,
+           inet_ntoa(my_admin->interface_addr));
 
     while (!my_admin->port.locked || !my_admin->ordinal.locked) {
         usleep(10000);

@@ -41,6 +41,8 @@ static double get_current_time()
 }
 
 /* Internal message handler prototypes. */
+static int handler_generic(const char *, const char *, lo_arg **, int,
+                           lo_message, void *);
 static int handler_who(const char *, const char *, lo_arg **, int,
                        lo_message, void *);
 static int handler_device(const char *, const char *, lo_arg **,
@@ -371,6 +373,10 @@ mapper_admin mapper_admin_new(const char *iface, const char *group, int port)
         return NULL;
     }
 
+    // Add the generic handler for verifying previously-sent messages
+    lo_server_add_method(admin->admin_server,
+                         0, 0, handler_generic, admin);
+
     return admin;
 }
 
@@ -462,6 +468,20 @@ void mapper_admin_add_monitor(mapper_admin admin, mapper_monitor mon)
     }
 }
 
+static void mapper_admin_resend_expired_msgs(mapper_admin admin)
+{
+    msg_verify_queue_t *q = admin->verify_queue;
+    double now = get_current_time();
+
+    while (q) {
+        if (now - q->time_sent > 1+rand()/(float)RAND_MAX) {
+            lo_send_message(admin->admin_addr, q->path, q->msg);
+            q->time_sent = now;
+        }
+        q = q->next;
+    }
+}
+
 /*! This is the main function to be called once in a while from a
  *  program so that the admin bus can be automatically managed.
  */
@@ -475,6 +495,8 @@ int mapper_admin_poll(mapper_admin admin)
     while (count < 10 && lo_server_recv_noblock(admin->admin_server, 0)) {
         count++;
     }
+
+    mapper_admin_resend_expired_msgs(admin);
 
     if (!admin->device)
         return count;
@@ -539,6 +561,7 @@ int mapper_admin_poll(mapper_admin admin)
               AT_REV, admin->device->version,
               AT_EXTRA, admin->device->extra);
     }
+
     return count;
 }
 
@@ -643,6 +666,60 @@ static int check_collisions(mapper_admin admin,
     return 0;
 }
 
+static void mapper_admin_add_msg_to_verify_queue(mapper_admin admin,
+                                                 const char *namedpath,
+                                                 lo_message m)
+{
+    msg_verify_queue_t **q = &admin->verify_queue;
+    msg_verify_queue_t *node =
+        (msg_verify_queue_t*)malloc(sizeof(msg_verify_queue_t));
+
+    node->next = *q;
+    node->path = namedpath;
+    node->msg = m;
+    node->time_sent = get_current_time();
+    *q = node;
+}
+
+static void mapper_admin_verify_msg(mapper_admin admin,
+                                    const char *path,
+                                    lo_message m)
+{
+    msg_verify_queue_t **q = &admin->verify_queue;
+    printf("verifying %s,%s..\n", path, lo_message_get_types(m));
+
+    char mem[1024], memq[1024];
+    size_t size, sizeq;
+
+    size = 1024;
+    lo_message_serialise(m, path, mem, &size);
+
+    while (*q) {
+        /* TODO: need to implmeent a more efficient message comparison
+         * function inside liblo, to avoid re-serialising every
+         * message for each check */
+
+        sizeq = 1024;
+        lo_message_serialise((*q)->msg, (*q)->path, memq, &sizeq);
+
+        if (size == sizeq
+            && memcmp(mem, memq, size)==0)
+        {
+            printf("found %s on queue\n", path);
+            break;
+        }
+        q = &(*q)->next;
+    }
+
+    if (*q) {
+        msg_verify_queue_t *node = *q;
+        *q = (*q)->next;
+        free((void*)node->path);
+        lo_message_free(node->msg);
+        free((void*)node);
+    }
+}
+
 void _real_mapper_admin_send_osc(mapper_admin admin, const char *path,
                                  const char *types, ...)
 {
@@ -692,7 +769,7 @@ void _real_mapper_admin_send_osc(mapper_admin admin, const char *path,
     va_end(aq);
 
     lo_send_message(admin->admin_addr, namedpath, m);
-    lo_message_free(m);
+    mapper_admin_add_msg_to_verify_queue(admin, strdup(namedpath), m);
 }
 
 void _real_mapper_admin_send_osc_with_params(const char *file, int line,
@@ -759,6 +836,16 @@ static void mapper_admin_send_connected(mapper_admin admin,
 /**********************************/
 /* Internal OSC message handlers. */
 /**********************************/
+
+/*! For any message, verify it against previously sent messages by
+ *  finding them on the verify queue and removing it. */
+static int handler_generic(const char *path, const char *types, lo_arg **argv,
+                           int argc, lo_message msg, void *user_data)
+{
+    mapper_admin admin = (mapper_admin) user_data;
+    mapper_admin_verify_msg(admin, path, msg);
+    return 1;
+}
 
 /*! Respond to /who by announcing the current device information. */
 static int handler_who(const char *path, const char *types, lo_arg **argv,

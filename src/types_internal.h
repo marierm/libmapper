@@ -86,6 +86,14 @@ typedef struct _mapper_admin_allocated_t {
     mapper_admin_resource_on_collision *on_collision;
 } mapper_admin_allocated_t;
 
+/*! A list node to hold sent message queue for verification. */
+typedef struct _msg_verify_queue {
+    struct _msg_verify_queue *next;
+    const char *path;
+    lo_message msg;
+    double time_sent;
+} msg_verify_queue_t;
+
 /*! A structure that keeps information about a device. */
 typedef struct _mapper_admin {
     char *identifier;                 /*!< The identifier (prefix) for
@@ -111,6 +119,8 @@ typedef struct _mapper_admin {
                                        *   in charge of. */
     struct _mapper_monitor *monitor;  /*!< Monitor that this admin is
                                        *   in charge of. */
+    msg_verify_queue_t *verify_queue; /*!< Queue of sent messages that
+                                       *   need to be verified. */
 } mapper_admin_t;
 
 /*! The handle to this device is a pointer. */

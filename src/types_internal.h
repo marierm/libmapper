@@ -71,22 +71,19 @@ typedef enum {
     ADM_DEVICE,
     ADM_DISCONNECT,
     ADM_DISCONNECTED,
-    ADM_GET_MY_CONNECTIONS,
-    ADM_GET_MY_CONNECTIONS_IN,
-    ADM_GET_MY_CONNECTIONS_OUT,
-    ADM_GET_MY_DEVICE,
-    ADM_GET_MY_LINKS,
-    ADM_GET_MY_LINKS_IN,
-    ADM_GET_MY_LINKS_OUT,
-    ADM_GET_MY_SIGNALS,
-    ADM_GET_MY_SIGNALS_IN,
-    ADM_GET_MY_SIGNALS_OUT,
     ADM_LINK,
     ADM_LINK_MODIFY,
     ADM_LINK_TO,
     ADM_LINKED,
+    ADM_LINK_PING,
     ADM_LOGOUT,
     ADM_SIGNAL,
+    ADM_INPUT,
+    ADM_OUTPUT,
+    ADM_INPUT_REMOVED,
+    ADM_OUTPUT_REMOVED,
+    ADM_SUBSCRIBE,
+    ADM_UNSUBSCRIBE,
     ADM_SYNC,
     ADM_UNLINK,
     ADM_UNLINKED,
@@ -123,32 +120,44 @@ typedef struct _mapper_admin_allocated_t {
 
 /*! Clock and timing information. */
 typedef struct _mapper_sync_timetag_t {
-    int device_id;
     int message_id;
     lo_timetag timetag;
 } mapper_sync_timetag_t;
 
 typedef struct _mapper_clock_t {
-    int wait_time;
-    double rate;
-    double offset;
-    float confidence;
     mapper_timetag_t now;
     uint32_t next_ping;
-    int message_id;
-    int local_index;
-    mapper_sync_timetag_t local[10];
-    mapper_sync_timetag_t remote;
 } mapper_clock_t, *mapper_clock;
+
+typedef struct _mapper_sync_clock_t {
+    double rate;
+    double offset;
+    double latency;
+    double jitter;
+    mapper_sync_timetag_t sent;
+    mapper_sync_timetag_t response;
+    int new;
+} mapper_sync_clock_t, *mapper_sync_clock;
+
+typedef struct _mapper_admin_subscriber {
+    lo_address                      address;
+    uint32_t                        lease_expiration_sec;
+    int                             flags;
+    struct _mapper_admin_subscriber *next;
+} *mapper_admin_subscriber;
 
 /*! A structure that keeps information about a device. */
 typedef struct _mapper_admin {
     int random_id;                    /*!< Random ID for allocation
                                            speedup. */
-    lo_server_thread admin_server;    /*!< LibLo server thread for the
+    lo_server_thread bus_server;      /*!< LibLo server thread for the
                                        *   admin bus. */
-    lo_address admin_addr;            /*!< LibLo address for the admin
+    int msgs_recvd;                   /*!< Number of messages received on the
+                                           admin bus. */
+    lo_address bus_addr;              /*!< LibLo address for the admin
                                        *   bus. */
+    lo_server_thread mesh_server;     /*!< LibLo server thread for the
+                                       *   admin mesh. */
     char *interface_name;             /*!< The name of the network
                                        *   interface for receiving
                                        *   messages. */
@@ -161,11 +170,15 @@ typedef struct _mapper_admin {
                                        *   time syncronization. */
     lo_bundle bundle;                 /*!< Bundle pointer for sending
                                        *   messages on the admin bus. */
+    lo_address bundle_dest;
+    int message_type;
+    mapper_admin_subscriber subscribers; /*!< Linked-list of subscribed peers. */
 } mapper_admin_t;
 
 /*! The handle to this device is a pointer. */
 typedef mapper_admin_t *mapper_admin;
 
+#define ADMIN_TIMEOUT_SEC 10        // timeout after 10 seconds without ping
 
 /**** Router ****/
 
@@ -181,9 +194,9 @@ typedef struct _mapper_connection {
     int calibrating;                        /*!< 1 if the source range is
                                              *   currently being calibrated,
                                              *   0 otherwise. */
-    void *blob;                             /*!< Blob for staging vector
-                                             *   signal updates. */
     mapper_expr expr;                       //!< The mapping expression.
+    mapper_signal_history_t **expr_vars;    //!< User variables values.
+    int num_expr_vars;                      //!< Number of user variables.
     mapper_signal_history_t *history;       /*!< Array of output histories
                                              *   for each signal instance. */
     struct _mapper_connection *next;        //!< Next connection in the list.
@@ -196,11 +209,14 @@ typedef struct _mapper_link_signal {
     struct _mapper_link *link;              //!< The parent link.
     struct _mapper_signal *signal;          //!< The associated signal.
     int num_instances;                      //!< Number of instances allocated.
+//    int max_output_size;                    /*!< Maximum output vector size in
+//                                             *   child connections. */
     mapper_signal_history_t *history;       /*!< Array of value histories
                                              *   for each signal instance. */
+    int history_size;                       /*! Size of the history vector. */
     mapper_connection connections;          /*!< The first connection for
                                              *   this signal. */
-    struct _mapper_link_signal *next;     /*!< The next signal connection
+    struct _mapper_link_signal *next;       /*!< The next signal connection
                                              *   in the list. */
 } *mapper_link_signal, *mapper_router_signal, *mapper_receiver_signal;
 
@@ -213,15 +229,17 @@ typedef struct _mapper_queue {
 /*! The link structure is a linked list of links each associated
  *  with a destination address that belong to a controller device. */
 typedef struct _mapper_link {
-    lo_address remote_addr;         //!< Network address of remote endpoint
+    lo_address admin_addr;          //!< Network address of remote endpoint
+    lo_address data_addr;           //!< Network address of remote endpoint
     mapper_db_link_t props;         //!< Properties.
     struct _mapper_device *device;  /*!< The device associated with
                                      *   this link */
     mapper_link_signal signals;     /*!< The list of connections
                                      *  for each signal. */
-    int n_connections;              //!< Number of connections in link.
+    int num_connections;            //!< Number of connections in link.
     mapper_queue queues;            /*!< Linked-list of message queues
                                      *   waiting to be sent. */
+    mapper_sync_clock_t clock;
     struct _mapper_link *next;      //!< Next link in the list.
 } *mapper_link, *mapper_router, *mapper_receiver;
 
@@ -273,6 +291,13 @@ typedef struct _mapper_db {
     fptr_list   link_callbacks;       //<! List of link record callbacks.
 } mapper_db_t, *mapper_db;
 
+typedef struct _mapper_monitor_subscription {
+    char                                *name;
+    int                                 flags;
+    uint32_t                            lease_expiration_sec;
+    struct _mapper_monitor_subscription *next;
+} *mapper_monitor_subscription;
+
 typedef struct _mapper_monitor {
     mapper_admin      admin;    //<! Admin for this monitor.
 
@@ -282,9 +307,15 @@ typedef struct _mapper_monitor {
     int own_admin;
 
     /*! Flags indicating whether information on signals, links,
-     *  and connections should be automatically requested when a
+     *  and connections should be automatically subscribed to when a
      *  new device is seen.*/
-    int autorequest;
+    int autosubscribe;
+
+    /*! The time after which the monitor will declare devices "unresponsive". */
+    int timeout_sec;
+
+    /*! Linked-list of autorenewing device subscriptions. */
+    mapper_monitor_subscription subscriptions;
 
     mapper_db_t       db;       //<! Database for this monitor.
 }  *mapper_monitor;

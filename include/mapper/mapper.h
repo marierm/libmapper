@@ -82,7 +82,7 @@ typedef void mapper_signal_instance_event_handler(mapper_signal msig,
  *                  bundling multiple signal updates with the same
  *                  timetag. */
 void msig_update(mapper_signal sig, void *value,
-                 int count, mapper_timetag_t tt);
+                 int count, mapper_timetag_t timetag);
 
 /*! Update the value of a scalar signal of type int.
  *  This is a scalar equivalent to msig_update(), for when passing by
@@ -114,7 +114,7 @@ void msig_update_double(mapper_signal sig, double value);
  *                  May be 0.
  *  \return         A pointer to an array containing the value
  *                  of the signal, or 0 if the signal has no value. */
-void *msig_value(mapper_signal sig, mapper_timetag_t *tt);
+void *msig_value(mapper_signal sig, mapper_timetag_t *timetag);
 
 /*! Query the values of any signals connected via mapping connections.
  *  \param sig      A local output signal. We will be querying the remote
@@ -151,8 +151,8 @@ int msig_reserve_instances(mapper_signal sig, int num, int *ids, void **user_dat
  *                      libmapper will tag the value update with the current
  *                      time. See mdev_start_queue() for more information on
  *                      bundling multiple signal updates with the same timetag. */
-void msig_update_instance(mapper_signal sig, int instance_id,
-                          void *value, int count, mapper_timetag_t tt);
+void msig_update_instance(mapper_signal sig, int instance_id, void *value,
+                          int count, mapper_timetag_t timetag);
 
 /*! Release a specific instance of a signal by removing it from the list
  *  of active instances and adding it to the reserve list.
@@ -163,7 +163,7 @@ void msig_update_instance(mapper_signal sig, int instance_id,
  *                     See mdev_start_queue() for more information on
  *                     bundling multiple signal updates with the same timetag. */
 void msig_release_instance(mapper_signal sig, int instance_id,
-                           mapper_timetag_t tt);
+                           mapper_timetag_t timetag);
 
 /*! Remove a specific instance of a signal and free its memory.
  *  \param sig         The signal to operate on.
@@ -191,7 +191,7 @@ int msig_get_newest_active_instance(mapper_signal sig, int *instance_id);
  *                     of the signal instance, or 0 if the signal instance
  *                     has no value. */
 void *msig_instance_value(mapper_signal sig, int instance_id,
-                          mapper_timetag_t *tt);
+                          mapper_timetag_t *timetag);
 
 /*! Copy group/routing data for sharing an instance abstraction
  *  between multiple signals.
@@ -368,8 +368,30 @@ mapper_signal mdev_add_input(mapper_device dev, const char *name,
                              mapper_signal_update_handler *handler,
                              void *user_data);
 
+/*! Add an input signal with multiple instances to a mapper device.
+ *  Values and strings pointed to by this call (except user_data) will be copied.
+ *  For minimum and maximum, actual type must correspond to 'type'.
+ *  If type='i', then int*; if type='f', then float*.
+ *  \param dev           The device to add a signal to.
+ *  \param name          The name of the signal.
+ *  \param length        The length of the signal vector, or 1 for a scalar.
+ *  \param type          The type fo the signal value.
+ *  \param unit          The unit of the signal, or 0 for none.
+ *  \param minimum       Pointer to a minimum value, or 0 for none.
+ *  \param maximum       Pointer to a maximum value, or 0 for none.
+ *  \param num_instances Number of instances to reserve.
+ *  \param handler       Function to be called when the value of the
+ *                       signal is updated.
+ *  \param user_data     User context pointer to be passed to handler. */
+mapper_signal mdev_add_input_with_instances(mapper_device dev, const char *name,
+                                            int length, char type, const char *unit,
+                                            void *minimum, void *maximum,
+                                            int num_instances,
+                                            mapper_signal_update_handler *handler,
+                                            void *user_data);
+
 /*! Add an output signal to a mapper device.  Values and strings
- *  pointed to by this call will be copied.
+ *  pointed to by this call (except user_data) will be copied.
  *  For minimum and maximum, actual type must correspond to 'type'.
  *  If type='i', then int*; if type='f', then float*.
  *  \param dev     The device to add a signal to.
@@ -382,6 +404,23 @@ mapper_signal mdev_add_input(mapper_device dev, const char *name,
 mapper_signal mdev_add_output(mapper_device dev, const char *name,
                               int length, char type, const char *unit,
                               void *minimum, void *maximum);
+
+/*! Add an output signal with multiple instances to a mapper device.
+ *  Values and strings pointed to by this call (except user_data) will be copied.
+ *  For minimum and maximum, actual type must correspond to 'type'.
+ *  If type='i', then int*; if type='f', then float*.
+ *  \param dev     The device to add a signal to.
+ *  \param name    The name of the signal.
+ *  \param length  The length of the signal vector, or 1 for a scalar.
+ *  \param type    The type fo the signal value.
+ *  \param unit    The unit of the signal, or 0 for none.
+ *  \param num_instances Number of instances to reserve.
+ *  \param minimum Pointer to a minimum value, or 0 for none.
+ *  \param maximum Pointer to a maximum value, or 0 for none. */
+mapper_signal mdev_add_output_with_instances(mapper_device dev, const char *name,
+                                             int length, char type, const char *unit,
+                                             void *minimum, void *maximum,
+                                             int num_instances);
 
 /* Remove a device's input signal.
  * \param dev The device to remove a signal from.
@@ -582,8 +621,8 @@ double mdev_get_clock_offset(mapper_device md);
  *  connection. */
 typedef enum {
     MDEV_LOCAL_ESTABLISHED,
-    MDEV_LOCAL_DESTROYED,
     MDEV_LOCAL_MODIFIED,
+    MDEV_LOCAL_DESTROYED,
 } mapper_device_local_action_t;
 
 /*! Function to call when a local device link is established or
@@ -649,6 +688,9 @@ mapper_admin mapper_admin_new(const char *iface, const char *group, int port);
 /*! Free an admin created with mapper_admin_new(). */
 void mapper_admin_free(mapper_admin admin);
 
+/*! Get the version of libmapper */
+const char *mapper_admin_libversion(mapper_admin admin);
+
 /* @} */
 
 /**** Device database ****/
@@ -659,6 +701,7 @@ typedef enum {
     MDB_MODIFY,
     MDB_NEW,
     MDB_REMOVE,
+    MDB_UNRESPONSIVE,
 } mapper_db_action_t;
 
 /***** Devices *****/
@@ -1208,7 +1251,7 @@ mapper_db_link_t **mapper_db_get_links_by_dest_device_name(
 mapper_db_link mapper_db_get_link_by_src_dest_names(mapper_db db,
     const char *src_device_name, const char *dest_device_name);
 
-/*! Return the list of links for a given source name.
+/*! Return the list of links that touch devices in both src and dest lists.
  *  \param db The database to query.
  *  \param src_device_list  Double-pointer to the first item in a list
  *                          returned from a previous database query.
@@ -1278,23 +1321,29 @@ int mapper_db_link_property_lookup(mapper_db_link link,
        general, the monitor interface is useful for building GUI
        applications to control the network. */
 
-typedef enum {
-    AUTOREQ_SIGNALS     = 0x01,
-    AUTOREQ_LINKS       = 0x02,
-    AUTOREQ_CONNECTIONS = 0x04,
-    AUTOREQ_ALL         = 0xFF
-} mapper_monitor_autoreq_mode_t;
+/*! Bit flags for coordinating monitor metadata subscriptions. Subsets of
+ *  device information must also include SUB_DEVICE. */
+#define SUB_DEVICE                  0x01
+#define SUB_DEVICE_INPUTS           0x03
+#define SUB_DEVICE_OUTPUTS          0x05
+#define SUB_DEVICE_SIGNALS          0x07 // SUB_DEVICE_INPUTS & SUB_DEVICE_OUTPUTS
+#define SUB_DEVICE_LINKS_IN         0x09
+#define SUB_DEVICE_LINKS_OUT        0x11
+#define SUB_DEVICE_LINKS            0x19 // SUB_DEVICE_LINKS_IN & SUB_DEVICE_LINKS_OUT
+#define SUB_DEVICE_CONNECTIONS_IN   0x21
+#define SUB_DEVICE_CONNECTIONS_OUT  0x41
+#define SUB_DEVICE_CONNECTIONS      0x61 // SUB_DEVICE_CONNECTIONS_IN & SUB_DEVICE_CONNECTION_OUT
+#define SUB_DEVICE_ALL              0xFF
 
 /*! Create a network monitor.
- *  \param admin    A previously allocated admin to use.  If 0, an
- *                  admin will be allocated for use with this monitor.
- *  \param flags    Sets whether the monitor should automatically
- *                  request information about signals, links, and
- *                  connections when it encounters a previously-unseen
- *                  device.
+ *  \param admin               A previously allocated admin to use.  If 0, an
+ *                             admin will be allocated for use with this monitor.
+ *  \param autosubscribe_flags Sets whether the monitor should automatically
+ *                             subscribe to information about signals, links,
+ *                             and connections when it encounters a
+ *                             previously-unseen device.
  *  \return The new monitor. */
-mapper_monitor mapper_monitor_new(mapper_admin admin,
-                                  mapper_monitor_autoreq_mode_t flags);
+mapper_monitor mapper_monitor_new(mapper_admin admin, int autosubscribe_flags);
 
 /*! Free a network monitor. */
 void mapper_monitor_free(mapper_monitor mon);
@@ -1310,102 +1359,54 @@ int mapper_monitor_poll(mapper_monitor mon, int block_ms);
  *  long as the monitor remains alive. */
 mapper_db mapper_monitor_get_db(mapper_monitor mon);
 
+/*! Set the timeout in seconds after which a monitor will declare a device
+ *  "unresponsive". Defaults to ADMIN_TIMEOUT_SEC.
+ *  \param mon      The monitor to use.
+ *  \param timeout  The timeout in seconds. */
+void mapper_monitor_set_timeout(mapper_monitor mon, int timeout);
+
+/*! Get the timeout in seconds after which a monitor will declare a device
+ *  "unresponsive". Defaults to ADMIN_TIMEOUT_SEC.
+ *  \param mon      The monitor to use.
+ *  \return The current timeout in seconds. */
+int mapper_monitor_get_timeout(mapper_monitor mon);
+
+/*! Remove unresponsive devices from the database.
+ *  \param mon         The monitor to use.
+ *  \param timeout_sec The number of seconds a device must have been
+ *                     unresponsive before removal.
+ *  \param quiet       1 to disable callbacks during db flush, 0 otherwise. */
+void mapper_monitor_flush_db(mapper_monitor mon, int timeout_sec, int quiet);
+
 /*! Request that all devices report in. */
-int mapper_monitor_request_devices(mapper_monitor mon);
+void mapper_monitor_request_devices(mapper_monitor mon);
 
-/*! Request properties for specific device. */
-int mapper_monitor_request_device_info(
-    mapper_monitor mon, const char* name);
+/*! Subscribe to information about a specific device.
+ *  \param mon             The monitor to use.
+ *  \param device_name     The name of the device of interest.
+ *  \param subscribe_flags Bitflags setting the type of information of interest.
+ *                         Can be a combination of SUB_DEVICE, SUB_DEVICE_INPUTS,
+ *                         SUB_DEVICE_OUTPUTS, SUB_DEVICE_SIGNALS,
+ *                         SUB_DEVICE_LINKS_IN, SUB_DEVICE_LINKS_OUT,
+ *                         SUB_DEVICE_LINKS, SUB_DEVICE_CONNECTIONS_IN,
+ *                         SUB_DEVICE_CONNECTIONS_OUT, SUB_DEVICE_CONNECTIONS,
+ *                         or simply SUB_DEVICE_ALL for all information.
+ *  \param timeout         The length in seconds for this subscription. If set
+ *                         to -1, libmapper will automatically renew the
+ *                         subscription until the monitor is freed or this
+ *                         function is called again. */
+void mapper_monitor_subscribe(mapper_monitor mon, const char *device_name,
+                              int subscribe_flags, int timeout);
 
-/*! Request signals for specific device. */
-int mapper_monitor_request_signals_by_device_name(
-    mapper_monitor mon, const char* name);
+/*! Unsubscribe from information about a specific device.
+ *  \param mon             The monitor to use.
+ *  \param device_name     The name of the device of interest. */
+void mapper_monitor_unsubscribe(mapper_monitor mon, const char *device_name);
 
-/*! Request output signals for specific device. */
-int mapper_monitor_request_output_signals_by_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request input signals for specific device. */
-int mapper_monitor_request_input_signals_by_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request an indexed subset of signals for specific device. */
-int mapper_monitor_request_signal_range_by_device_name(
-    mapper_monitor mon, const char* name, int start_index, int stop_index);
-
-/*! Request an indexed subset of output signals for specific device. */
-int mapper_monitor_request_output_signal_range_by_device_name(
-    mapper_monitor mon, const char* name, int start_index, int stop_index);
-
-/*! Request an indexed subset of input signals for specific device. */
-int mapper_monitor_request_intput_signal_range_by_device_name(
-    mapper_monitor mon, const char* name, int start_index, int stop_index);
-
-/*! Request signals for specific device in measured batches. */
-int mapper_monitor_batch_request_signals_by_device_name(
-    mapper_monitor mon, const char* name, int batch_size);
-
-/*! Request output signals for specific device in measured batches. */
-int mapper_monitor_batch_request_output_signals_by_device_name(
-    mapper_monitor mon, const char* name, int batch_size);
-
-/*! Request input signals for specific device in measured batches. */
-int mapper_monitor_batch_request_input_signals_by_device_name(
-    mapper_monitor mon, const char* name, int batch_size);
-
-/*! Request links for specific device. */
-int mapper_monitor_request_links_by_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request outgoing links for specific device. */
-int mapper_monitor_request_links_by_src_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request incoming links for specific device. */
-int mapper_monitor_request_links_by_dest_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request connections for specific device. */
-int mapper_monitor_request_connections_by_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request outgoing connections for specific device. */
-int mapper_monitor_request_connections_by_src_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request incoming connections for specific device. */
-int mapper_monitor_request_connections_by_dest_device_name(
-    mapper_monitor mon, const char* name);
-
-/*! Request an indexed subset of connections for specific device. */
-int mapper_monitor_request_connection_range_by_device_name(
-    mapper_monitor mon, const char* name, int start_index, int stop_index);
-    
-/*! Request an indexed subset of outgoing connections for specific device. */
-int mapper_monitor_request_connection_range_by_src_device_name(
-    mapper_monitor mon, const char* name, int start_index, int stop_index);
-
-/*! Request an indexed subset of incoming connections for specific device. */
-int mapper_monitor_request_connection_range_by_dest_device_name(
-    mapper_monitor mon, const char* name, int start_index, int stop_index);
-
-/*! Request connections for specific device in measured batches. */
-int mapper_monitor_batch_request_connections_by_device_name(
-    mapper_monitor mon, const char* name, int batch_size);
-
-/*! Request outgoing connections for specific device in measured batches. */
-int mapper_monitor_batch_request_connections_by_src_device_name(
-    mapper_monitor mon, const char* name, int batch_size);
-
-/*! Request incoming connections for specific device in measured batches. */
-int mapper_monitor_batch_request_connections_by_dest_device_name(
-    mapper_monitor mon, const char* name, int batch_size);
-
-/*! Sets whether the monitor should automatically make requests for
+/*! Sets whether the monitor should automatically subscribe to
  *  information on signals, links, and connections when it encounters
  *  a previously-unseen device.*/
-void mapper_monitor_autorequest(mapper_monitor mon,
-                                mapper_monitor_autoreq_mode_t flags);
+void mapper_monitor_autosubscribe(mapper_monitor mon, int autosubscribe_flags);
 
 /*! Interface to add a link between two devices.
  *  \param mon            The monitor to use for sending the message.
@@ -1487,7 +1488,7 @@ void mdev_now(mapper_device dev,
               mapper_timetag_t *tt);
 
 /*! Initialize a timetag to the current mapping network time.
- *  \param dev  The device whose time we are asking for.
+ *  \param mon  The monitor whose time we are asking for.
  *  \param tt   A previously allocated timetag to initialize. */
 void mapper_monitor_now(mapper_monitor mon,
                         mapper_timetag_t *tt);
@@ -1499,20 +1500,28 @@ void mapper_monitor_now(mapper_monitor mon,
 double mapper_timetag_difference(mapper_timetag_t a, mapper_timetag_t b);
 
 /*! Add seconds to a given timetag.
- *  \param timetag  A previously allocated timetag to augment.
+ *  \param tt       A previously allocated timetag to augment.
  *  \param addend   An amount in seconds to add. */
 void mapper_timetag_add_seconds(mapper_timetag_t *tt, double addend);
 
-/*! Return value of mapper_timetag as a double-precision floating point value. */
+/*! Return value of mapper_timetag as a double-precision floating point value.
+ *  \param tt   The timetag to read.
+ *  \return     The timetag value in seconds. */
 double mapper_timetag_get_double(mapper_timetag_t tt);
 
-/*! Set value of a mapper_timetag from an integer value. */
+/*! Set value of a mapper_timetag from an integer value.
+ *  \param tt       The timetag to set.
+ *  \param value    Time value in seconds. */
 void mapper_timetag_set_int(mapper_timetag_t *tt, int value);
 
-/*! Set value of a mapper_timetag from a floating point value. */
+/*! Set value of a mapper_timetag from a floating point value.
+ *  \param tt       The timetag to set.
+ *  \param value    Time value in seconds. */
 void mapper_timetag_set_float(mapper_timetag_t *tt, float value);
 
-/*! Set value of a mapper_timetag from a double-precision floating point value. */
+/*! Set value of a mapper_timetag from a double-precision floating point value.
+ *  \param tt       The timetag to set.
+ *  \param value    Time value in seconds. */
 void mapper_timetag_set_double(mapper_timetag_t *tt, double value);
 
 /*! Copy value of a mapper_timetag. */

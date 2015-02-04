@@ -1,5 +1,6 @@
 
-TEST_CFLAGS = -Wall -I$(top_srcdir)/include $(liblo_CFLAGS)
+TEST_CFLAGS = -Wall -I$(top_srcdir)/include @liblo_CFLAGS@
+TEST_CXXFLAGS = -Wall -I$(top_srcdir)/include @liblo_CFLAGS@
 
 if WINDOWS_DLL
 TEST_LDADD = $(top_builddir)/src/*.lo $(liblo_LIBS)
@@ -12,6 +13,14 @@ noinst_PROGRAMS = test testadmin testcustomtransport testdb testexpression \
                   testparser testprops testqueue testquery testrate testrecv \
                   testreverse testselect testsend testsignals testspeed testsync \
                   testvector
+if HAVE_LAMBDA
+noinst_PROGRAMS += testcpp
+endif
+
+test_all_ordered = testparams testprops testdb testparser testadmin testmany \
+                   testsend testrecv test testlinear testexpression testqueue \
+                   testquery testrate testinstance testreverse testselect \
+                   testvector testcustomtransport testspeed testsync testcpp
 
 test_CFLAGS = $(TEST_CFLAGS)
 test_SOURCES = test.c
@@ -20,6 +29,10 @@ test_LDADD = $(TEST_LDADD)
 testadmin_CFLAGS = $(TEST_CFLAGS)
 testadmin_SOURCES = testadmin.c
 testadmin_LDADD = $(TEST_LDADD)
+
+testcpp_CXXFLAGS = $(TEST_CXXFLAGS)
+testcpp_SOURCES = testcpp.cpp
+testcpp_LDADD = $(TEST_LDADD)
 
 testcustomtransport_CFLAGS = $(TEST_CFLAGS)
 testcustomtransport_SOURCES = testcustomtransport.c
@@ -104,3 +117,10 @@ testsync_LDADD = $(TEST_LDADD)
 testvector_CFLAGS = $(TEST_CFLAGS)
 testvector_SOURCES = testvector.c
 testvector_LDADD = $(TEST_LDADD)
+
+tests: all
+	for i in $(test_all_ordered); do echo Running $$i; if ! ./$$i -qt; then exit 1; fi; done
+	echo Running testmonitor and testsignals; ./testmonitor -t & ./testsignals
+
+memtest: all
+	for i in $(noinst_PROGRAMS); do echo Running $$i; if ! LD_PRELOAD=/usr/local/lib/libmapper-0.2.dylib valgrind --leak-check=full ./.libs/$$i -qt; then exit 1; fi; done
